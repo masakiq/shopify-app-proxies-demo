@@ -64,15 +64,15 @@ get '/proxy/customer_token' do
   response.headers['Content-Type'] = 'application/liquid'
   <<~LIQ
     {% layout none %}
-    {% if customer.id == #{params['customer_id']} %}
-      {"status":200,"message":"success","data":{"token":"#{jwt}"}}
-    {% else %}
+    {% if customer.id == nil or customer.id != #{params['customer_id']} %}
       {"status":401,"message":"unauthorized","data":null}
+    {% else %}
+      {"status":200,"message":"success","data":{"token":"#{jwt}"}}
     {% endif %}
   LIQ
 end
 
-get '/proxy/customer_id' do
+get '/proxy/customer_info' do
   # 検証処理はスキップ
   response.headers['Content-Type'] = 'application/json'
   begin
@@ -97,17 +97,28 @@ get '/proxy/account' do
       </br>
       </br>
       </br>
+      {% if customer.id == nil %}
+        ログインしていない
+      {% else %}
+        ログイン中(customerId: {{ customer.id }})
+      {% endif %}
+      </br>
       <label>Customer ID</label>
       <input type="text" id="customerId" name="customerId" value="{{ customer.id }}">
+      <input type="button" id="clearCustomerId" value="Clear">
       <input type="button" id="getCustomerToken" value="Get Customer Token">
       </br>
       <label>Customer Token</label>
       <input type="text" id="customerToken" name="customerToken" value="">
+      <input type="button" id="clearCustomerToken" value="Clear">
       <input type="button" id="getCustomerInfo" value="Get Customer Info">
       </br>
       <label>Customer Info</label>
       <input type="text" id="customerInfo" name="customerInfo" value="">
+      <input type="button" id="clearCustomerInfo" value="Clear">
       </br>
+      </br>
+      <a href="{{ routes.account_logout_url }}">ログアウト</a>
     </body>
     <script type="text/javascript">
       async function getCustomerToken() {
@@ -134,7 +145,7 @@ get '/proxy/account' do
 
       async function getCustomerInfo() {
         const customerToken = document.getElementById('customerToken').value;
-        const url = '/apps/proxy/customer_id?customer_token=' + customerToken;
+        const url = '/apps/proxy/customer_info?customer_token=' + customerToken;
         const result = await fetch(
           url,
           {
@@ -149,6 +160,21 @@ get '/proxy/account' do
         document.getElementById('customerInfo').value = customerId;
       }
       document.getElementById('getCustomerInfo').addEventListener('click', getCustomerInfo);
+
+      function clearCustomerId() {
+        document.getElementById('customerId').value = '';
+      }
+      document.getElementById('clearCustomerId').addEventListener('click', clearCustomerId);
+
+      function clearCustomerToken() {
+        document.getElementById('customerToken').value = '';
+      }
+      document.getElementById('clearCustomerToken').addEventListener('click', clearCustomerToken);
+
+      function clearCustomerInfo() {
+        document.getElementById('customerInfo').value = '';
+      }
+      document.getElementById('clearCustomerInfo').addEventListener('click', clearCustomerInfo);
     </script>
   HTML
 end
