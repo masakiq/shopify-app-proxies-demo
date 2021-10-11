@@ -81,8 +81,11 @@ get '/proxy/customer_token' do
   begin
     verify_proxy_signature(request.query_string)
   rescue InvalidProxyRequest
-    response.headers['Content-Type'] = 'application/liquid'
-    return 'Invalid Proxy Request'
+    response.status = 400
+    json = <<~JSON
+      {"message":"invalid request"}
+    JSON
+    return json
   end
 
   jwt = encode_jwt(params['customer_id'], params['shop'])
@@ -99,14 +102,17 @@ get '/proxy/customer_token' do
 end
 
 get '/proxy/customer_info' do
+  response.headers['Content-Type'] = 'application/json'
   begin
     verify_proxy_signature(request.query_string)
   rescue InvalidProxyRequest
-    response.headers['Content-Type'] = 'application/liquid'
-    return 'Invalid Proxy Request'
+    response.status = 400
+    json = <<~JSON
+      {"message":"invalid request"}
+    JSON
+    return json
   end
 
-  response.headers['Content-Type'] = 'application/json'
   begin
     customer_token = decode_jwt(params['customer_token'])
     customer_id = customer_token['sub']
@@ -123,14 +129,13 @@ get '/proxy/customer_info' do
 end
 
 get '/proxy/account' do
+  response.headers['Content-Type'] = 'application/liquid'
   begin
     verify_proxy_signature(request.query_string)
   rescue InvalidProxyRequest
-    response.headers['Content-Type'] = 'application/liquid'
     return 'Invalid Proxy Request'
   end
 
-  response.headers['Content-Type'] = 'application/liquid'
   <<~HTML
     <body>
       </br>
@@ -222,7 +227,6 @@ get '/proxy/secure_account' do
   begin
     verify_proxy_signature(request.query_string)
   rescue InvalidProxyRequest
-    response.headers['Content-Type'] = 'application/liquid'
     return 'Invalid Proxy Request'
   end
 
