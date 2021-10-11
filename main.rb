@@ -4,7 +4,17 @@ require 'openssl'
 require 'sinatra'
 require 'httparty'
 require 'jwt'
+require 'rack/utils'
 require 'pry'
+
+class InvalidProxyRequest < StandardError; end
+
+set :protection, except: :frame_options
+
+not_found do
+  response.headers['Content-Type'] = 'application/liquid'
+  'not found'
+end
 
 get '/' do
   puts request.body.rewind
@@ -24,7 +34,7 @@ get '/' do
 end
 
 get '/callback' do
-  # 検証処理はスキップ
+  # skip verification
   puts request.body.rewind
   code = params['code']
   shop = params['shop']
@@ -44,7 +54,12 @@ get '/callback' do
 end
 
 get '/proxy/' do
-  puts request.query_string
+  begin
+    verify_proxy_signature(request.query_string)
+  rescue InvalidProxyRequest
+    response.headers['Content-Type'] = 'application/liquid'
+    return 'Invalid Proxy Request'
+  end
 
   puts '***** REQUEST PARAMS *****'
   params.each do |key, val|
@@ -54,11 +69,22 @@ get '/proxy/' do
   env.each do |key, val|
     puts "#{key}: #{val}"
   end
+  puts '***** HTTP HEADERS *****'
+  headers = request.env.select { |k, _v| k.start_with?('HTTP_') }
+  headers.each do |k, v|
+    puts "#{k} -> #{v}"
+  end
   puts '*' * 20
 end
 
 get '/proxy/customer_token' do
-  # 検証処理はスキップ
+  begin
+    verify_proxy_signature(request.query_string)
+  rescue InvalidProxyRequest
+    response.headers['Content-Type'] = 'application/liquid'
+    return 'Invalid Proxy Request'
+  end
+
   jwt = encode_jwt(params['customer_id'], params['shop'])
 
   response.headers['Content-Type'] = 'application/liquid'
@@ -73,7 +99,13 @@ get '/proxy/customer_token' do
 end
 
 get '/proxy/customer_info' do
-  # 検証処理はスキップ
+  begin
+    verify_proxy_signature(request.query_string)
+  rescue InvalidProxyRequest
+    response.headers['Content-Type'] = 'application/liquid'
+    return 'Invalid Proxy Request'
+  end
+
   response.headers['Content-Type'] = 'application/json'
   begin
     customer_token = decode_jwt(params['customer_token'])
@@ -91,6 +123,13 @@ get '/proxy/customer_info' do
 end
 
 get '/proxy/account' do
+  begin
+    verify_proxy_signature(request.query_string)
+  rescue InvalidProxyRequest
+    response.headers['Content-Type'] = 'application/liquid'
+    return 'Invalid Proxy Request'
+  end
+
   response.headers['Content-Type'] = 'application/liquid'
   <<~HTML
     <body>
@@ -177,6 +216,147 @@ get '/proxy/account' do
       document.getElementById('clearCustomerInfo').addEventListener('click', clearCustomerInfo);
     </script>
   HTML
+end
+
+get '/proxy/secure_account' do
+  begin
+    verify_proxy_signature(request.query_string)
+  rescue InvalidProxyRequest
+    response.headers['Content-Type'] = 'application/liquid'
+    return 'Invalid Proxy Request'
+  end
+
+  response.headers['Content-Type'] = 'application/liquid'
+  <<~HTML
+    <body>
+      <input type="hidden" id="customerId" name="customerId" value="{{ customer.id }}">
+      <iframe
+        id="customerContext"
+        title="Customer Context"
+        width="100%"
+        height="500px"
+        src="#{ENV['SHOPIFY_APP_BASE_URL']}/original/secure_account">
+      </iframe>
+    </body>
+    <script type="text/javascript">
+      async function getCustomerToken() {
+        const customerId = document.getElementById('customerId').value;
+        const url = '/apps/proxy/customer_token?customer_id=' + customerId;
+        const result = await fetch(
+          url,
+          {
+            headers: {
+              accept: "application/json, text/plain, */*"
+            },
+            credentials: 'include'
+          }
+        );
+        const json = await result.json();
+        if (json.status === 200) {
+          const customerToken = json.data.token;
+          let customerContext = document.getElementById('customerContext').contentWindow;
+          customerContext.postMessage(customerToken, '#{ENV['SHOPIFY_APP_BASE_URL']}');
+
+          // Invalid Access!! Blocked by CORS policy.
+          // getCustomerInfo(customerToken);
+        } else {
+          console.log('error');
+        }
+      }
+
+      async function getCustomerInfo(customerToken) {
+        const url = '#{ENV['SHOPIFY_APP_BASE_URL']}/original/secure_customer_info?customer_token=' + customerToken;
+        const result = await fetch(
+          url,
+          {
+            headers: {
+              accept: "application/json, text/plain, */*"
+            },
+            credentials: 'include'
+          }
+        );
+        const json = await result.json();
+        const customerId = json.data.customer_id;
+        console.log(customerId);
+      }
+
+      window.onload = getCustomerToken();
+
+      // window.addEventListener('message', function(event) {
+      //   console.log(event.data);
+      // }, false);
+    </script>
+  HTML
+end
+
+get '/original/secure_account' do
+  # headers = request.env.select { |k, _v| k.start_with?('HTTP_') }
+  # headers.each do |k, v|
+  #   puts "#{k} -> #{v}"
+  # end
+  response.headers['Content-Type'] = 'text/html'
+  <<~HTML
+    <body>
+      </br>
+      </br>
+      </br>
+      <label>Customer Info</label>
+      <input type="text" id="customerInfo" name="customerInfo" value="">
+    </body>
+    <script type="text/javascript">
+      async function getCustomerInfo(customerToken) {
+        const url = '#{ENV['SHOPIFY_APP_BASE_URL']}/original/secure_customer_info?customer_token=' + customerToken;
+        const result = await fetch(
+          url,
+          {
+            headers: {
+              accept: "application/json, text/plain, */*"
+            },
+            credentials: 'include'
+          }
+        );
+        const json = await result.json();
+        const customerId = json.data.customer_id;
+        document.getElementById('customerInfo').value = customerId;
+      }
+
+      window.addEventListener('message', function(event) {
+        getCustomerInfo(event.data);
+        // event.source.postMessage(customerId, event.origin);
+      }, false);
+    </script>
+  HTML
+end
+
+get '/original/secure_customer_info' do
+  response.headers['Content-Type'] = 'application/json'
+  begin
+    customer_token = decode_jwt(params['customer_token'])
+    customer_id = customer_token['sub']
+    <<~JSON
+      {"message":"success","data":{"customer_id":"#{customer_id}"}}
+    JSON
+  rescue StandardError => e
+    puts e
+    response.status = 404
+    <<~JSON
+      {"message":"fail","data":{"customer_id":"#{e.message}"}}
+    JSON
+  end
+end
+
+def verify_proxy_signature(query_string)
+  puts query_string
+
+  query_hash = Rack::Utils.parse_query(query_string)
+  signature = query_hash.delete('signature')
+  sorted_params = query_hash.collect { |k, v| "#{k}=#{Array(v).join(',')}" }.sort.join
+  calculated_signature = OpenSSL::HMAC.hexdigest(
+    OpenSSL::Digest.new('sha256'),
+    ENV['SHOPIFY_APP_API_SECRET_KEY'],
+    sorted_params
+  )
+  raise InvalidProxyRequest unless signature == calculated_signature
 end
 
 def encode_jwt(customer_id, shop)
